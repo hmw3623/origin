@@ -24,49 +24,22 @@ parameters:
   displayName: Name
   name: NAME
   required: true
-  value: nodejs-mongodb-example
-- description: The exposed hostname that will route to the Node.js service, if left
-    blank a value will be defaulted.
-  displayName: Application Hostname
-  name: APPLICATION_DOMAIN
-- description: The URL of the repository with your application source code.
-  displayName: Git Repository URL
-  name: SOURCE_REPOSITORY_URL
+  value: httpd-example
+- description: The OpenShift Namespace where the ImageStream resides.
+  displayName: Namespace
+  name: NAMESPACE
   required: true
-  value: https://github.com/openshift/nodejs-ex.git
-- displayName: Database Name
-  name: DATABASE_NAME
-  required: true
-  value: sampledb
-- description: Username for MongoDB user that will be used for accessing the database.
-  displayName: MongoDB Username
-  from: user[A-Z0-9]{3}
-  generate: expression
-  name: DATABASE_USER
-- description: Password for the MongoDB user.
-  displayName: MongoDB Password
-  from: '[a-zA-Z0-9]{16}'
-  generate: expression
-  name: DATABASE_PASSWORD
-- description: Maximum amount of memory the Node.js container can use.
+  value: openshift
+- description: Maximum amount of memory the container can use.
   displayName: Memory Limit
   name: MEMORY_LIMIT
   required: true
   value: 512Mi
-- description: Maximum amount of memory the MongoDB container can use.
-  displayName: Memory Limit (MongoDB)
-  name: MEMORY_MONGODB_LIMIT
+- description: The URL of the repository with your application source code.
+  displayName: Git Repository URL
+  name: SOURCE_REPOSITORY_URL
   required: true
-  value: 512Mi
-- displayName: Database Service Name
-  name: DATABASE_SERVICE_NAME
-  required: true
-  value: mongodb
-- description: Password for the database admin user.
-  displayName: Database Administrator Password
-  from: '[a-zA-Z0-9]{16}'
-  generate: expression
-  name: DATABASE_ADMIN_PASSWORD
+  value: https://github.com/hmw3623/httpd-ex.git
 - description: Set this to a branch name, tag or other ref of your repository if you
     are not using the default branch.
   displayName: Git Reference
@@ -75,7 +48,12 @@ parameters:
     of your repository.
   displayName: Context Directory
   name: CONTEXT_DIR
-- description: Github trigger secret.  A difficult to guess string encoded as part of the webhook URL.  Not encrypted.
+- description: The exposed hostname that will route to the httpd service, if left
+    blank a value will be defaulted.
+  displayName: Application Hostname
+  name: APPLICATION_DOMAIN
+- description: Github trigger secret.  A difficult to guess string encoded as part
+    of the webhook URL.  Not encrypted.
   displayName: GitHub Webhook Secret
   from: '[a-zA-Z0-9]{40}'
   generate: expression
@@ -85,14 +63,6 @@ parameters:
   from: '[a-zA-Z0-9]{40}'
   generate: expression
   name: GENERIC_WEBHOOK_SECRET
-- description: The custom NPM mirror URL
-  displayName: Custom NPM Mirror URL
-  name: NPM_MIRROR
-- description: The OpenShift Namespace where the NodeJS and MongoDB ImageStreams reside.
-  displayName: Namespace
-  name: NAMESPACE
-  required: true
-  value: openshift
 objects:
 - apiVersion: v1
   kind: BuildConfig
@@ -108,7 +78,7 @@ objects:
         jenkinsfile: |-
           try {
              timeout(time: 20, unit: 'MINUTES') {
-                node('nodejs') {
+                node('httpd') {
                     stage('build') {
                       openshift.withCluster() {
                          openshift.withProject() {
@@ -148,7 +118,7 @@ objects:
   kind: Service
   metadata:
     annotations:
-      service.alpha.openshift.io/dependencies: '[{"name": "${DATABASE_SERVICE_NAME}", "namespace": "", "kind": "Service"}]'
+      description: Exposes and load balances the application pods
     name: ${NAME}
   spec:
     ports:
@@ -177,14 +147,13 @@ objects:
   metadata:
     annotations:
       description: Defines how to build the application
+      template.alpha.openshift.io/wait-for-ready: "true"
     name: ${NAME}
   spec:
     output:
       to:
         kind: ImageStreamTag
         name: ${NAME}:latest
-    postCommit:
-      script: npm test
     source:
       contextDir: ${CONTEXT_DIR}
       git:
@@ -193,15 +162,25 @@ objects:
       type: Git
     strategy:
       sourceStrategy:
-        env:
-        - name: NPM_MIRROR
-          value: ${NPM_MIRROR}
         from:
           kind: ImageStreamTag
-          name: nodejs:12
+        name: ${NAME}:latest
+    source:
+      contextDir: ${CONTEXT_DIR}
+      git:
+        ref: ${SOURCE_REPOSITORY_REF}
+        uri: ${SOURCE_REPOSITORY_URL}
+      type: Git
+    strategy:
+      sourceStrategy:
+        from:
+          kind: ImageStreamTag
+          name: httpd:2.4
           namespace: ${NAMESPACE}
       type: Source
     triggers:
+    - type: ImageChange
+    - type: ConfigChange
     - github:
         secret: ${GITHUB_WEBHOOK_SECRET}
       type: GitHub
@@ -213,6 +192,7 @@ objects:
   metadata:
     annotations:
       description: Defines how to deploy the application server
+      template.alpha.openshift.io/wait-for-ready: "true"
     name: ${NAME}
   spec:
     replicas: 1
@@ -227,30 +207,20 @@ objects:
         name: ${NAME}
       spec:
         containers:
-        - env:
-          - name: DATABASE_SERVICE_NAME
-            value: ${DATABASE_SERVICE_NAME}
-          - name: MONGODB_USER
-            value: ${DATABASE_USER}
-          - name: MONGODB_PASSWORD
-            value: ${DATABASE_PASSWORD}
-          - name: MONGODB_DATABASE
-            value: ${DATABASE_NAME}
-          - name: MONGODB_ADMIN_PASSWORD
-            value: ${DATABASE_ADMIN_PASSWORD}
+        - env: []
           image: ' '
           livenessProbe:
             httpGet:
-              path: /pagecount
+              path: /
               port: 8080
             initialDelaySeconds: 30
             timeoutSeconds: 3
-          name: nodejs-mongodb-example
+          name: httpd-example
           ports:
           - containerPort: 8080
           readinessProbe:
             httpGet:
-              path: /pagecount
+              path: /
               port: 8080
             initialDelaySeconds: 3
             timeoutSeconds: 3
@@ -259,92 +229,11 @@ objects:
               memory: ${MEMORY_LIMIT}
     triggers:
     - imageChangeParams:
-        automatic: false
+        automatic: true
         containerNames:
-        - nodejs-mongodb-example
+        - httpd-example
         from:
           kind: ImageStreamTag
           name: ${NAME}:latest
-      type: ImageChange
-    - type: ConfigChange
-- apiVersion: v1
-  kind: Service
-  metadata:
-    annotations:
-      description: Exposes the database server
-    name: ${DATABASE_SERVICE_NAME}
-  spec:
-    ports:
-    - name: mongodb
-      port: 27017
-      targetPort: 27017
-    selector:
-      name: ${DATABASE_SERVICE_NAME}
-- apiVersion: v1
-  kind: DeploymentConfig
-  metadata:
-    annotations:
-      description: Defines how to deploy the database
-    name: ${DATABASE_SERVICE_NAME}
-  spec:
-    replicas: 1
-    selector:
-      name: ${DATABASE_SERVICE_NAME}
-    strategy:
-      type: Recreate
-    template:
-      metadata:
-        labels:
-          name: ${DATABASE_SERVICE_NAME}
-        name: ${DATABASE_SERVICE_NAME}
-      spec:
-        containers:
-        - env:
-          - name: MONGODB_USER
-            value: ${DATABASE_USER}
-          - name: MONGODB_PASSWORD
-            value: ${DATABASE_PASSWORD}
-          - name: MONGODB_DATABASE
-            value: ${DATABASE_NAME}
-          - name: MONGODB_ADMIN_PASSWORD
-            value: ${DATABASE_ADMIN_PASSWORD}
-          image: ' '
-          livenessProbe:
-            initialDelaySeconds: 30
-            tcpSocket:
-              port: 27017
-            timeoutSeconds: 1
-          name: mongodb
-          ports:
-          - containerPort: 27017
-          readinessProbe:
-            exec:
-              command:
-              - /bin/sh
-              - -i
-              - -c
-              - mongo 127.0.0.1:27017/$MONGODB_DATABASE -u $MONGODB_USER -p $MONGODB_PASSWORD
-                --eval="quit()"
-            initialDelaySeconds: 3
-            timeoutSeconds: 1
-          resources:
-            limits:
-              memory: ${MEMORY_MONGODB_LIMIT}
-          volumeMounts:
-          - mountPath: /var/lib/mongodb/data
-            name: ${DATABASE_SERVICE_NAME}-data
-        volumes:
-        - emptyDir:
-            medium: ""
-          name: ${DATABASE_SERVICE_NAME}-data
-    triggers:
-    - imageChangeParams:
-        automatic: true
-        containerNames:
-        - mongodb
-        from:
-          kind: ImageStreamTag
-          name: mongodb:3.2
-          namespace: ${NAMESPACE}
       type: ImageChange
     - type: ConfigChange
