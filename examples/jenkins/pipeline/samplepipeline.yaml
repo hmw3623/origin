@@ -229,7 +229,7 @@ objects:
               memory: ${MEMORY_LIMIT}
     triggers:
     - imageChangeParams:
-        automatic: true
+        automatic: false
         containerNames:
         - httpd-example
         from:
